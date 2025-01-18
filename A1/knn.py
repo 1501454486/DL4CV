@@ -4,7 +4,7 @@ Implements a K-Nearest Neighbor classifier in PyTorch.
 from itertools import count
 from math import sqrt
 from pyexpat.errors import XML_ERROR_ATTRIBUTE_EXTERNAL_ENTITY_REF
-from networkx import number_of_cliques
+from networkx import k_crust, number_of_cliques
 import torch
 from typing import Dict, List
 
@@ -220,16 +220,20 @@ def predict_labels(dists: torch.Tensor, y_train: torch.Tensor, k: int = 1):
     # HINT: Look up the function torch.topk                                  #
     ##########################################################################
     # Replace "pass" statement with your code
+
     for col in range(num_test):
-        values, indices = torch.topk(dists[:, col], k, largest = False)
+        # 获取距离最近的k个训练样本的索引
+        _, indices = torch.topk(dists[:, col], k, largest = False)
+        # 获取这k个样本对应的标签
         k_nearest_labels = y_train[indices]
 
-        unique, counts = torch.unique(k_nearest_labels, return_counts = True)
+        # 统计各个标签的出现次数
         # 找到最大计数和索引
         counts = torch.bincount(k_nearest_labels)
         max_count = torch.max(counts)
         max_labels = torch.where(counts == max_count)[0]
         y_pred[col] = torch.min(max_labels)
+
     ##########################################################################
     #                           END OF YOUR CODE                             #
     ##########################################################################
@@ -253,7 +257,8 @@ class KnnClassifier:
         # `self.x_train` and `self.y_train`, accordingly.                    #
         ######################################################################
         # Replace "pass" statement with your code
-        pass
+        self.x_train = x_train
+        self.y_train = y_train
         ######################################################################
         #                         END OF YOUR CODE                           #
         ######################################################################
@@ -277,7 +282,8 @@ class KnnClassifier:
         # to predict output labels.                                          #
         ######################################################################
         # Replace "pass" statement with your code
-        pass
+        dists = compute_distances_no_loops(self.x_train, x_test)
+        y_test_pred = predict_labels(dists, self.y_train, k)
         ######################################################################
         #                         END OF YOUR CODE                           #
         ######################################################################
@@ -351,7 +357,10 @@ def knn_cross_validate(
     # HINT: torch.chunk                                                      #
     ##########################################################################
     # Replace "pass" statement with your code
-    pass
+
+    x_train_folds = list(torch.chunk(x_train, chunks = num_folds, dim = 0))
+    y_train_folds = list(torch.chunk(y_train, chunks = num_folds, dim = 0))
+
     ##########################################################################
     #                           END OF YOUR CODE                             #
     ##########################################################################
@@ -372,7 +381,17 @@ def knn_cross_validate(
     # HINT: torch.cat                                                        #
     ##########################################################################
     # Replace "pass" statement with your code
-    pass
+    
+    for k in k_choices:
+        k_to_accuracies[k] = []
+        for i in range(num_folds):
+            x_valid = x_train_folds[i]
+            y_valid = y_train_folds[i]
+            x_train = torch.cat(x_train_folds[ :i] + x_train_folds[i + 1: ], dim = 0)
+            y_train = torch.cat(y_train_folds[ :i] + y_train_folds[i + 1: ], dim = 0)
+            classifier = KnnClassifier(x_train, y_train)
+            k_to_accuracies[k].append(classifier.check_accuracy(x_valid, y_valid, k = k))
+
     ##########################################################################
     #                           END OF YOUR CODE                             #
     ##########################################################################
@@ -402,8 +421,11 @@ def knn_get_best_k(k_to_accuracies: Dict[int, List]):
     # the value of k that has the highest mean accuracy accross all folds.   #
     ##########################################################################
     # Replace "pass" statement with your code
-    pass
+
+    means = {k: (sum(v) / len(v)) for k, v in k_to_accuracies.items()}
+    best_k = max(means, key = means.get)
+
     ##########################################################################
     #                           END OF YOUR CODE                             #
-    ##########################################################################
+    #####################################################W#####################
     return best_k
