@@ -4,7 +4,7 @@ WARNING: you SHOULD NOT use ".to()" or ".cuda()" in each implementation block.
 """
 import torch
 import random
-import statistics
+from eecs598.a2_helpers import plot_acc_curves
 from linear_classifier import sample_batch
 from typing import Dict, List, Callable, Optional
 
@@ -147,7 +147,10 @@ def nn_forward_pass(params: Dict[str, torch.Tensor], X: torch.Tensor):
     # shape (N, C).                                                            #
     ############################################################################
     # Replace "pass" statement with your code
-    pass
+    
+    hidden = torch.max(torch.matmul(X, W1) + b1, torch.zeros(N, W1.shape[1], device = 'cuda'))
+    scores = torch.matmul(hidden, W2) + b2
+
     ###########################################################################
     #                             END OF YOUR CODE                            #
     ###########################################################################
@@ -212,7 +215,19 @@ def nn_forward_backward(
     # (Check Numeric Stability in http://cs231n.github.io/linear-classify/).   #
     ############################################################################
     # Replace "pass" statement with your code
-    pass
+    
+    # 数值稳定性处理，[0]是因为max返回的是一个tuple:(values, indices)
+    scores_shifted = scores - scores.max(dim = 1, keepdim = True)[0]
+    
+    exp_scores = torch.exp(scores_shifted)
+    probs = exp_scores / exp_scores.sum(dim = 1, keepdim = True)
+
+    # Calculate Cross-entropy loss.
+    loss = -torch.log(probs[torch.arange(N), y]).sum() / N
+
+    # Regulation.
+    loss += reg * ((W1 ** 2).sum() + (W2 ** 2).sum())
+
     ###########################################################################
     #                             END OF YOUR CODE                            #
     ###########################################################################
@@ -226,7 +241,20 @@ def nn_forward_backward(
     # tensor of same size                                                     #
     ###########################################################################
     # Replace "pass" statement with your code
-    pass
+    
+    grad_scores = exp_scores / exp_scores.sum(dim = 1, keepdim = True)
+    grad_scores[torch.arange(N), y] -= 1
+
+    # 注意，在计算的时候偏置被自动广播了，要通过求和消除
+    grads['b2'] = grad_scores.sum(dim = 0) / N
+    grads['W2'] = torch.matmul(h1.T, grad_scores) / N + 2 * reg * W2
+    grad_h1 = torch.matmul(grad_scores, W2.T)
+
+    # output1 = torch.mm(X, W1) + b1
+    grad_o1 = torch.where(torch.matmul(X, W1) + b1 > 0, grad_h1, torch.zeros_like(grad_h1))
+    grads['b1'] = grad_o1.sum(dim = 0) / N
+    grads['W1'] = torch.matmul(X.T, grad_o1) / N + 2 * reg * W1
+
     ###########################################################################
     #                             END OF YOUR CODE                            #
     ###########################################################################
@@ -307,7 +335,12 @@ def nn_train(
         # stored in the grads dictionary defined above.                         #
         #########################################################################
         # Replace "pass" statement with your code
-        pass
+        
+        params['W1'] -= learning_rate * (learning_rate_decay * grads['W1'] + (1 - learning_rate_decay) * grads['W1'])
+        params['b1'] -= learning_rate * (learning_rate_decay * grads['b1'] + (1 - learning_rate_decay) * grads['b1'])
+        params['W2'] -= learning_rate * (learning_rate_decay * grads['W2'] + (1 - learning_rate_decay) * grads['W2'])
+        params['b2'] -= learning_rate * (learning_rate_decay * grads['b2'] + (1 - learning_rate_decay) * grads['b2'])
+
         #########################################################################
         #                             END OF YOUR CODE                          #
         #########################################################################
@@ -365,7 +398,11 @@ def nn_predict(
     # TODO: Implement this function; it should be VERY simple!                #
     ###########################################################################
     # Replace "pass" statement with your code
-    pass
+
+    h1 = torch.max(torch.mm(X, params['W1']) + params['b1'], torch.zeros(X.shape[0], params['W1'].shape[1], device = 'cuda'))
+    scores = (torch.mm(h1, params['W2']) + params['b2'])
+    y_pred = scores.max(dim = 1)[1]
+
     ###########################################################################
     #                              END OF YOUR CODE                           #
     ###########################################################################
@@ -399,7 +436,12 @@ def nn_get_search_params():
     # classifier.                                                             #
     ###########################################################################
     # Replace "pass" statement with your code
-    pass
+
+    learning_rates = [0.3, 0.35, 0.4, 0.5]
+    hidden_sizes = [64, 128, 256]
+    regularization_strengths = [1e-5, 3e-5, 1e-4, 3e-4, 1e-3, 3e-3]
+    learning_rate_decays = [0.95, 0.96, 0.97, 0.98]
+
     ###########################################################################
     #                           END OF YOUR CODE                              #
     ###########################################################################
@@ -460,7 +502,124 @@ def find_best_net(
     # automatically like we did on the previous exercises.                      #
     #############################################################################
     # Replace "pass" statement with your code
-    pass
+    
+    # a base parameter set:
+    defalt_params = {
+        'learning_rate': 1,
+        'hidden_size': 64,
+        'regularization_strength': 1e-4,
+        'learning_rate_decay': 0.98
+    }
+    params = get_param_set_fn()
+    input_size = data_dict['X_train'].shape[1]
+    output_size = data_dict['y_train'].shape[0]
+    num_iters = 3000
+    batch_size = 1000
+
+    # Test1: learning_rate
+    lr_dict = {}
+    print('Test1: learning rate: ')
+    net = TwoLayerNet(input_size = input_size,
+                      hidden_size = defalt_params['hidden_size'],
+                      output_size = output_size)
+    learning_rates = params[0]
+    for learning_rate in learning_rates:
+        stats = net.train(X = data_dict['X_train'],
+                         y = data_dict['y_train'],
+                         X_val = data_dict['X_val'],
+                         y_val = data_dict['y_val'],
+                         learning_rate = learning_rate,
+                         learning_rate_decay = defalt_params['learning_rate_decay'],
+                         reg = defalt_params['regularization_strength'],
+                         num_iters = num_iters,
+                         batch_size = batch_size)
+        lr_dict[learning_rate] = stats
+    best_lr = max(lr_dict.keys(), 
+              key=lambda lr: lr_dict[lr]['val_acc_history'][-1])
+    plot_acc_curves(lr_dict)
+
+    # Test2: hidden_sizes
+    hs_dict = {}
+    print('Test2: hidden sizes:')
+    hidden_sizes = params[1]
+    for hidden_size in hidden_sizes:
+        net = TwoLayerNet(input_size = input_size,
+                          hidden_size = hidden_size,
+                          output_size = output_size)
+        stats = net.train(X = data_dict['X_train'],
+                         y = data_dict['y_train'],
+                         X_val = data_dict['X_val'],
+                         y_val = data_dict['y_val'],
+                         learning_rate = learning_rate,
+                         learning_rate_decay = defalt_params['learning_rate_decay'],
+                         reg = defalt_params['regularization_strength'],
+                         num_iters = num_iters,
+                         batch_size = batch_size)
+        hs_dict[hidden_size] = stats
+    best_hs = max(hs_dict.keys(), 
+              key=lambda hs: hs_dict[hs]['val_acc_history'][-1])
+    plot_acc_curves(hs_dict)
+
+    # Test3: regularization_strength
+    reg_dict = {}
+    print('Test3: regularization strength:')
+    regularization_strengths = params[2]
+    net = TwoLayerNet(input_size = input_size,
+                      hidden_size = defalt_params['hidden_size'],
+                      output_size = output_size)
+    for regularization_strength in regularization_strengths:
+        stats = net.train(X = data_dict['X_train'],
+                         y = data_dict['y_train'],
+                         X_val = data_dict['X_val'],
+                         y_val = data_dict['y_val'],
+                         learning_rate = learning_rate,
+                         learning_rate_decay = defalt_params['learning_rate_decay'],
+                         reg = regularization_strength,
+                         num_iters = num_iters,
+                         batch_size = batch_size)
+        reg_dict[regularization_strength] = stats
+    best_reg = max(reg_dict.keys(), 
+              key=lambda rg: reg_dict[rg]['val_acc_history'][-1])
+    plot_acc_curves(reg_dict)
+
+    # Test4: learning_rate_decays
+    lrc_dict = {}
+    print('Test4: learning rate decays:')
+    learning_rate_decays = params[3]
+    net = TwoLayerNet(input_size = input_size,
+                      hidden_size = defalt_params['hidden_size'],
+                      output_size = output_size)
+    for learning_rate_decay in learning_rate_decays:
+        stats = net.train(X = data_dict['X_train'],
+                         y = data_dict['y_train'],
+                         X_val = data_dict['X_val'],
+                         y_val = data_dict['y_val'],
+                         learning_rate = learning_rate,
+                         learning_rate_decay = learning_rate_decay,
+                         reg = defalt_params['regularization_strength'],
+                         num_iters = num_iters,
+                         batch_size = batch_size)
+        lrc_dict[learning_rate_decay] = stats
+    best_lrc = max(lrc_dict.keys(), 
+              key=lambda lrc: lrc_dict[lrc]['val_acc_history'][-1])
+    plot_acc_curves(lrc_dict)
+
+    # Test5: combine the best parameters
+    print('Training best net:')
+    best_net = TwoLayerNet(input_size = input_size,
+                      hidden_size = best_hs,
+                      output_size = output_size)
+    best_stat = best_net.train(X = data_dict['X_train'],
+                      y = data_dict['y_train'],
+                      X_val = data_dict['X_val'],
+                      y_val = data_dict['y_val'],
+                      learning_rate = best_lr,
+                      learning_rate_decay = best_lrc,
+                      reg = best_reg,
+                      num_iters = num_iters,
+                      batch_size = batch_size)
+    best_val_acc = best_stat['val_acc_history'][-1]
+
     #############################################################################
     #                               END OF YOUR CODE                            #
     #############################################################################
