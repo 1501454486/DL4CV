@@ -47,7 +47,7 @@ class Linear(object):
         # Replace "pass" statement with your code
         
         N = x.shape[0]
-        out = torch.mm(x.view(N, -1), w) + b
+        out = torch.mm(x.reshape(N, -1), w) + b
 
         ######################################################################
         #                        END OF YOUR CODE                            #
@@ -80,7 +80,7 @@ class Linear(object):
         
         N = x.shape[0]
         dx = torch.mm(dout, w.T).reshape(x.shape)
-        dw = torch.mm((x.view(N, -1).T), dout)
+        dw = torch.mm((x.reshape(N, -1).T), dout)
         db = dout.sum(dim = 0)
 
         ##################################################
@@ -541,7 +541,7 @@ def create_solver_instance(data_dict, dtype, device):
     
     solver = Solver(model,
                     data = data_dict,
-                    update_rule = sgd,
+                    update_rule = adam,
                     optim_config = {
                         'learning_rate': 0.3,
                     },
@@ -706,10 +706,11 @@ def adam(w, dw, config=None):
     ##########################################################################
     # Replace "pass" statement with your code
     
+    config['t'] += 1
     config['m'] = config['beta1'] * config['m'] + (1 - config['beta1']) * dw
-    mt = config['m'] / (1 - config['beta1'] ** 2)
+    mt = config['m'] / (1 - config['beta1'] ** config['t'])
     config['v'] = config['beta2'] * config['v'] + (1 - config['beta2']) * (dw ** 2)
-    vt = config['v'] / (1 - config['beta2'] ** 2)
+    vt = config['v'] / (1 - config['beta2'] ** config['t'])
     next_w = w - config['learning_rate'] * mt / (torch.sqrt(vt) + config['epsilon'])
 
     #########################################################################
