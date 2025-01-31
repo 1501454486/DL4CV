@@ -9,7 +9,7 @@ from attr import validate
 from cv2 import LOCAL_OPTIM_INNER_AND_ITER_LO, moments
 from networkx import number_weakly_connected_components
 import torch
-from a3_helper import softmax_loss
+from A3.a3_helper import softmax_loss
 from eecs598 import Solver
 
 

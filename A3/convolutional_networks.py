@@ -4,8 +4,8 @@ WARNING: you SHOULD NOT use ".to()" or ".cuda()" in each implementation block.
 """
 from networkx import sigma
 import torch
-from a3_helper import softmax_loss
-from fully_connected_networks import Linear_ReLU, Linear, Solver, adam, ReLU
+from A3.a3_helper import softmax_loss
+from A3.fully_connected_networks import Linear_ReLU, Linear, Solver, adam, ReLU
 
 
 def hello_convolutional_networks():

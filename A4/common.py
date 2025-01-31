@@ -7,10 +7,15 @@ walk through the notebooks and you will find instructions on *when* to implement
 from typing import Dict, Tuple
 
 import torch
-from torch import nn
+from torch import _test_autograd_multiple_dispatch_view_copy, conv2d, nn
 from torch.nn import functional as F
 from torchvision import models
 from torchvision.models import feature_extraction
+from torchvision.ops import box_area
+
+import sys
+sys.path.append("E:/learning/computers/3DV/DL4CV assignment")
+from A3.convolutional_networks import Conv
 
 
 def hello_common():
@@ -84,11 +89,32 @@ class DetectorBackboneWithFPN(nn.Module):
         self.fpn_params = nn.ModuleDict()
 
         # Replace "pass" statement with your code
-        pass
+        
+        # dummy_out_shapes[1]是输入通道数
+        for level_name, feature_shape in dummy_out_shapes:
+            in_channels = feature_shape[1]
+
+            self.fpn_params[f'lateral_{level_name}'] = nn.Conv2d(
+                in_channels = in_channels,      # 输入通道数(从backbone获取的特征通道数)
+                out_channels = out_channels,    # 输出通道数(统一的FPN通道)
+                kernel_size = 1,                # 1x1卷积核
+                padding = 0,                    # 1x1卷积不需要填充
+                stride = 1                      # 步长为1
+            )
+
+            self.fpn_params[f'output_{level_name}'] = nn.Conv2d(
+                in_channels = out_channels,     # 输入通道数(与lateral层输出通道数相同)
+                out_channels = out_channels,    # 输出通道数(保持不变)
+                kernel_size = 3,                # 3x3卷积核
+                padding = 1,                    # 填充以保持大小不变
+                stride = 1                      # 步长为1
+            )
+
         ######################################################################
         #                            END OF YOUR CODE                        #
         ######################################################################
 
+    # @property是python的一个装饰器，增加后可以像访问属性一样访问一个方法(不需要加括号)
     @property
     def fpn_strides(self):
         """
@@ -111,7 +137,30 @@ class DetectorBackboneWithFPN(nn.Module):
         ######################################################################
 
         # Replace "pass" statement with your code
-        pass
+        
+        # 从p5到p3
+        # 首先处理p5
+        c5 = backbone_feats['c5']
+        p5_lateral = self.fpn_params['lateral_c5'](c5)
+        p5 = self.fpn_params['output_c5'](p5_lateral)
+        fpn_feats["p5"] = p5
+        p5_upsampled = F.interpolate( p5_lateral, scale_factor = 2, mode = 'nearest')
+
+        # 处理p4
+        c4 = backbone_feats['c4']
+        p4_lateral = self.fpn_params['lateral_c4'](c4)
+        p4_merged = p4_lateral + p5_upsampled
+        p4 = self.fpn_params['output_c4'](p4_merged)
+        fpn_feats['p4'] = p4
+        p4_upsampled = F.interpolate( p4_merged, scale_factor = 2, mode = 'nearest')
+
+        # 处理p3
+        c3 = backbone_feats['c3']
+        p3_lateral = self.fpn_params['lateral_c3'](c3)
+        p3_merged = p3_lateral + p4_upsampled
+        p3 = self.fpn_params['output_c3'](p3_merged)
+        fpn_feats["p3"] = p3
+
         ######################################################################
         #                            END OF YOUR CODE                        #
         ######################################################################
@@ -157,7 +206,49 @@ def get_fpn_location_coords(
         # TODO: Implement logic to get location co-ordinates below.          #
         ######################################################################
         # Replace "pass" statement with your code
-        pass
+        
+        # 直观的循环写法
+        # B, C, H, W = feat_shape
+        # location_coord = torch.zeros( (H * W, 2), dtype = dtype, device = device )
+        # for i in range(H):
+        #     for j in range(W):
+        #         location_coord[i * W + j, 0] = j
+        #         location_coord[i * W + j, 1] = i
+        # location_coords[level_name] = ( location_coord + 0.5 ) * level_stride
+
+
+        # 向量版本
+
+        _, _, H, W = feat_shape
+
+        # 创建网格坐标
+        shifts_x = torch.arange( W, dtype = dtype, device = device )
+        shifts_y = torch.arange( H, dtype = dtype, device = device )
+
+        # 生成网格点
+        # torch.meshgrid会根据两个一维tensor生成二维网格
+        # indexing = 'ij' 确保按照矩阵索引方式排列(i对应行，j对应列)
+
+        # 对于 H=2, W=3 的例子，生成的网格是：
+        # shift_x:
+        # tensor([[0, 1, 2],
+        #         [0, 1, 2]])
+
+        # shift_y:
+        # tensor([[0, 0, 0],
+        #         [1, 1, 1]])
+        shift_y, shift_x = torch.meshgrid( shifts_y, shifts_x, indexing = 'ij' )
+        
+        # 展平并堆叠
+        location_coord = torch.stack(
+            [shift_y.reshape(-1),       # x坐标
+             shift_x.reshape(-1)],      # y坐标
+             dim = -1                    # 沿维度1堆叠，即每行是一个坐标对
+        )
+
+        # 加上0.5并乘以stride得到中心点坐标
+        location_coords[level_name] = ((location_coord + 0.5) * level_stride).view(-1, 2)
+
         ######################################################################
         #                             END OF YOUR CODE                       #
         ######################################################################
@@ -196,7 +287,52 @@ def nms(boxes: torch.Tensor, scores: torch.Tensor, iou_threshold: float = 0.5):
     # github.com/pytorch/vision/blob/main/torchvision/csrc/ops/cpu/nms_kernel.cpp
     #############################################################################
     # Replace "pass" statement with your code
-    pass
+    
+    if boxes.numel() == 0:
+        return torch.zeros(0, dtype=torch.long, device=boxes.device)
+
+    # 1. 按分数降序排序
+    scores, idx = scores.sort(descending=True)
+    boxes = boxes[idx]
+
+    # 2. 初始化保留列表
+    keep = torch.ones(len(boxes), dtype=torch.bool, device=boxes.device)
+
+    # 3. 计算所有框之间的IoU
+    # 获取所有框的坐标
+    x1 = boxes[:, 0]
+    y1 = boxes[:, 1]
+    x2 = boxes[:, 2]
+    y2 = boxes[:, 3]
+
+    # 计算所有框的面积
+    areas = (x2 - x1) * (y2 - y1)  # [N]
+
+    for i in range(len(boxes)):
+        if not keep[i]:
+            continue
+            
+        # 计算当前框与剩余所有框的IoU
+        # 只需要计算与得分较低的框的IoU
+        xx1 = x1[i].clamp(min=x1[i + 1:])  # [N-i-1]
+        yy1 = y1[i].clamp(min=y1[i + 1:])  # [N-i-1]
+        xx2 = x2[i].clamp(max=x2[i + 1:])  # [N-i-1]
+        yy2 = y2[i].clamp(max=y2[i + 1:])  # [N-i-1]
+
+        # 计算交集面积
+        w = (xx2 - xx1).clamp(min=0)  # [N-i-1]
+        h = (yy2 - yy1).clamp(min=0)  # [N-i-1]
+        inter = w * h  # [N-i-1]
+
+        # 计算IoU
+        ovr = inter / (areas[i] + areas[i + 1:] - inter)  # [N-i-1]
+        
+        # 将IoU大于阈值的框标记为不保留
+        keep[i + 1:][ovr > iou_threshold] = False
+
+    # 返回保留的框的索引（按分数降序排序）
+    keep = idx[keep]
+
     #############################################################################
     #                              END OF YOUR CODE                             #
     #############################################################################
