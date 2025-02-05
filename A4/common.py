@@ -288,50 +288,93 @@ def nms(boxes: torch.Tensor, scores: torch.Tensor, iou_threshold: float = 0.5):
     #############################################################################
     # Replace "pass" statement with your code
     
-    if boxes.numel() == 0:
-        return torch.zeros(0, dtype=torch.long, device=boxes.device)
+    # if boxes.numel() == 0:
+    #     return torch.zeros(0, dtype=torch.long, device=boxes.device)
 
-    # 1. 按分数降序排序
-    scores, idx = scores.sort(descending=True)
-    boxes = boxes[idx]
+    # # 1. 按分数降序排序
+    # scores, idx = scores.sort(descending=True)
+    # boxes = boxes[idx]
 
-    # 2. 初始化保留列表
-    keep = torch.ones(len(boxes), dtype=torch.bool, device=boxes.device)
+    # # 2. 初始化保留列表
+    # keep = torch.ones(len(boxes), dtype=torch.bool, device=boxes.device)
 
-    # 3. 计算所有框之间的IoU
-    # 获取所有框的坐标
-    x1 = boxes[:, 0]
-    y1 = boxes[:, 1]
-    x2 = boxes[:, 2]
-    y2 = boxes[:, 3]
+    # # 3. 计算所有框之间的IoU
+    # # 获取所有框的坐标
+    # x1 = boxes[:, 0]
+    # y1 = boxes[:, 1]
+    # x2 = boxes[:, 2]
+    # y2 = boxes[:, 3]
 
-    # 计算所有框的面积
-    areas = (x2 - x1) * (y2 - y1)  # [N]
+    # # 计算所有框的面积
+    # areas = (x2 - x1) * (y2 - y1)  # [N]
 
-    for i in range(len(boxes)):
-        if not keep[i]:
-            continue
+    # for i in range(len(boxes)):
+    #     if not keep[i]:
+    #         continue
             
-        # 计算当前框与剩余所有框的IoU
-        # 只需要计算与得分较低的框的IoU
-        xx1 = x1[i].clamp(min=x1[i + 1:])  # [N-i-1]
-        yy1 = y1[i].clamp(min=y1[i + 1:])  # [N-i-1]
-        xx2 = x2[i].clamp(max=x2[i + 1:])  # [N-i-1]
-        yy2 = y2[i].clamp(max=y2[i + 1:])  # [N-i-1]
+    #     # 计算当前框与剩余所有框的IoU
+    #     # 只需要计算与得分较低的框的IoU
+    #     xx1 = x1[i].clamp(min=x1[i + 1:])  # [N-i-1]
+    #     yy1 = y1[i].clamp(min=y1[i + 1:])  # [N-i-1]
+    #     xx2 = x2[i].clamp(max=x2[i + 1:])  # [N-i-1]
+    #     yy2 = y2[i].clamp(max=y2[i + 1:])  # [N-i-1]
 
-        # 计算交集面积
-        w = (xx2 - xx1).clamp(min=0)  # [N-i-1]
-        h = (yy2 - yy1).clamp(min=0)  # [N-i-1]
-        inter = w * h  # [N-i-1]
+    #     # 计算交集面积
+    #     w = (xx2 - xx1).clamp(min=0)  # [N-i-1]
+    #     h = (yy2 - yy1).clamp(min=0)  # [N-i-1]
+    #     inter = w * h  # [N-i-1]
 
-        # 计算IoU
-        ovr = inter / (areas[i] + areas[i + 1:] - inter)  # [N-i-1]
+    #     # 计算IoU
+    #     ovr = inter / (areas[i] + areas[i + 1:] - inter)  # [N-i-1]
         
-        # 将IoU大于阈值的框标记为不保留
-        keep[i + 1:][ovr > iou_threshold] = False
+    #     # 将IoU大于阈值的框标记为不保留
+    #     keep[i + 1:][ovr > iou_threshold] = False
 
-    # 返回保留的框的索引（按分数降序排序）
-    keep = idx[keep]
+    # # 返回保留的框的索引（按分数降序排序）
+    # keep = idx[keep]
+
+    if boxes.numel() == 0:
+      return keep
+
+    keep = [] # a list, convert to python long at last
+    x1, y1, x2, y2 = boxes[:, :4].unbind(dim=1)
+    area = torch.mul(x2 - x1, y2 - y1) # area of each boxes, shape: (N, )
+    _, index = scores.sort(0) # sort the score in ascending order
+
+    count = 0
+    while index.numel() > 0:
+      # keep the highest-scoring box and remove that from the index list
+      largest_idx = index[-1]
+      keep.append(largest_idx)
+      count += 1
+      index = index[:-1]
+      
+      # if no more box remaining, break
+      if index.size(0) == 0:
+        break
+
+      # get the x1,y1,x2,y2 of all the remaining boxes, and clamp them so that
+      # we get the coord of intersection of boxes and highest-scoring box
+      x1_inter = torch.index_select(x1, 0, index).clamp(min=x1[largest_idx])
+      y1_inter = torch.index_select(y1, 0, index).clamp(min=y1[largest_idx])
+      x2_inter = torch.index_select(x2, 0, index).clamp(max=x2[largest_idx])
+      y2_inter = torch.index_select(y2, 0, index).clamp(max=y2[largest_idx])
+
+      # clamp the width and height, get the intersect area
+      W_inter = (x2_inter - x1_inter).clamp(min=0.0)
+      H_inter = (y2_inter - y1_inter).clamp(min=0.0)
+      inter_area = W_inter * H_inter
+
+      # retrieve the areas of all the remaining boxes, and get the union area 
+      areas = torch.index_select(area, 0, index)
+      union_area = (areas - inter_area) + area[largest_idx]
+
+      # keep the boxes that have IoU <= iou_threshold
+      IoU = inter_area / union_area
+      index = index[IoU.le(iou_threshold)]
+
+    # convert list to torch.long
+    keep = torch.Tensor(keep).to(device=scores.device).long()
 
     #############################################################################
     #                              END OF YOUR CODE                             #
