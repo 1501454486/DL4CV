@@ -4,6 +4,7 @@ Make sure to write device-agnostic code. For any function, initialize new tensor
 on the same device as input tensors
 """
 
+import re
 import torch
 
 
@@ -41,7 +42,18 @@ def compute_saliency_maps(X, y, model):
     # Hint: X.grad.data stores the gradients                                     #
     ##############################################################################
     # Replace "pass" statement with your code
-    pass
+    
+    # print("Shape of X: ", X.shape)
+    pred_scores = model(X)
+    # print("Shape of pred_scores: ", pred_scores.shape)
+    # print("Shape of y: ", y.shape)
+    loss = torch.nn.functional.cross_entropy(pred_scores, y, reduction = 'none')
+    # print("Shape of loss: ", loss.shape)
+    # print("Loss: ", loss)
+    loss.sum().backward()
+    # print("Shape of X.grad.data: ", X.grad.data.shape)
+    saliency, _ = X.grad.data.max(dim = 1)
+
     ##############################################################################
     #               END OF YOUR CODE                                             #
     ##############################################################################
@@ -68,6 +80,7 @@ def make_adversarial_attack(X, target_y, model, max_iter=100, verbose=True):
     # gradient
     X_adv = X.clone()
     X_adv = X_adv.requires_grad_()
+    X_adv.retain_grad()
 
     learning_rate = 1
     ##############################################################################
@@ -84,7 +97,30 @@ def make_adversarial_attack(X, target_y, model, max_iter=100, verbose=True):
     # You can print your progress over iterations to check your algorithm.       #
     ##############################################################################
     # Replace "pass" statement with your code
-    pass
+
+    target_y = torch.tensor([target_y], device = X.device)
+    for iter in range(max_iter):
+        # forward pass to get pred_scores
+        pred_scores = model(X_adv)
+        # Compute loss
+        loss = torch.nn.functional.cross_entropy(pred_scores, target_y.long(), reduction = 'none')
+        
+        target_score, pred_y = pred_scores.max(dim = 1)
+        if pred_y == target_y[0]:
+            break;
+
+        # backpropagate through pre_scores to get gradients of X_adv
+        loss.sum().backward()
+        with torch.no_grad():
+            gradient = X_adv.grad.data
+            # NOTE: we need to minimize our loss! because loss is the distance between target_y and current y
+            X_adv -= learning_rate * gradient / torch.sqrt(gradient ** 2 + 1e-8)
+        X_adv.grad.zero_()
+
+        if verbose is True:
+            print("Iteration {}: target score {:.3f}, max score {:.3f}".format(iter, pred_scores[0, pred_y[0]].item(), target_score.item()))
+
+
     ##############################################################################
     #                             END OF YOUR CODE                               #
     ##############################################################################
@@ -119,7 +155,22 @@ def class_visualization_step(img, target_y, model, **kwargs):
     # after each step.                                                     #
     ########################################################################
     # Replace "pass" statement with your code
-    pass
+
+    # zero grad
+    if img.grad is not None:
+        img.grad.zero_()
+    
+    # compute regularization term
+    R = l2_reg * (img ** 2).sum()
+    pred_y = model(img)                     # shape: (1, num_classes)
+    pred_score = pred_y[0, target_y]
+    loss = pred_score - R
+    
+    loss.sum().backward()
+    with torch.no_grad():
+        gradient = img.grad.data
+        img += learning_rate * gradient
+
     ########################################################################
     #                             END OF YOUR CODE                         #
     ########################################################################
